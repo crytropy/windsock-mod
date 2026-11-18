@@ -2,12 +2,14 @@ import { expect, test } from 'claude-code/testing'
 
 import {
   addPoint,
+  branchNames,
   cellWidth,
   current,
   forecastFor,
   hasLimits,
   hasNoPr,
   HISTORY,
+  isDetached,
   isHot,
   isPush,
   mergeReading,
@@ -192,4 +194,17 @@ test('a pull request page and whether it is still open', async () => {
   expect(prPage(JSON.stringify({ number: 12, url, state: 'CLOSED' }))).toEqual({ url, isOpen: false })
   expect(prPage(JSON.stringify({ url: 'javascript:alert(1)', state: 'OPEN' }))).toBeNull()
   expect(prPage('no pull requests found')).toBeNull()
+})
+
+test('gh failing because no branch is checked out', async () => {
+  expect(isDetached('could not determine current branch: failed to run git: not on any branch')).toBe(true)
+  expect(isDetached('no pull requests found for branch "main"')).toBe(false)
+  expect(isDetached('HTTP 502: Bad Gateway')).toBe(false)
+})
+
+test('the branches at a commit, one a line, a few at most', async () => {
+  expect(branchNames('main\nfeat/keys\n')).toEqual(['main', 'feat/keys'])
+  expect(branchNames('  feat/keys \r\n\r\n')).toEqual(['feat/keys'])
+  expect(branchNames('')).toEqual([])
+  expect(branchNames('a\nb\nc\nd\ne\nf\ng\n')).toEqual(['a', 'b', 'c', 'd', 'e'])
 })

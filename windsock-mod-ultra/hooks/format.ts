@@ -204,6 +204,26 @@ export function hasNoPr(stderr: string): boolean {
   return /no pull requests found|not a git repository|no git remotes|known GitHub host|gh auth login/i.test(stderr)
 }
 
+/**
+ * Whether `gh pr view` failed because no branch is checked out (a detached
+ * HEAD): a branch at the same commit may still have a pull request.
+ */
+export function isDetached(stderr: string): boolean {
+  return /not on any branch/i.test(stderr)
+}
+
+// Branches at one commit asked for a pull request, at most.
+const BRANCHES_MAX = 5
+
+/** The branch names `git for-each-ref --format=%(refname:short)` printed, one a line: the first few. */
+export function branchNames(stdout: string): string[] {
+  return stdout
+    .split('\n')
+    .map(line => line.trim())
+    .filter(line => line !== '')
+    .slice(0, BRANCHES_MAX)
+}
+
 /** Whether a shell command pushes a branch or opens its pull request. */
 export function isPush(command: string): boolean {
   return /\bgit\b[^\n;|&]*\bpush\b|\bgh\s+pr\s+(create|ready|reopen)\b/.test(command)

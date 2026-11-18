@@ -43,6 +43,12 @@ Context 的天氣顯示參考 Anthropic 的 [Token Weather](https://github.com/a
 
 留著的 PR 一樣只顯示上面三種狀態；CI 失敗、有衝突、變回草稿時先不顯示，但會繼續追，修好了就再出現。合併或關掉後就拿掉（目前分支自己的 PR 合併後還是顯示 `●`）。
 
+### 不在分支上時
+
+repo 停在某個 commit、沒掛在任何分支上（detached HEAD）時，`gh pr view` 不知道要問哪個分支。這時會改問「指向同一個 commit 的本機分支」的 PR：用 `git for-each-ref --points-at HEAD` 找分支，最多問 5 個，顯示第一個有 PR 的。沒有分支指向這個 commit 時，這個 session 之前看過、還開著的 PR 照樣留著。
+
+### 多久讀一次
+
 狀態是用本機的 [`gh`](https://cli.github.com/) 讀的（`gh pr view`），所以要先裝好 `gh` 並登入；沒裝或沒登入，這一段就不顯示。每輪對話結束時會讀一次（最多每分鐘一次）；閒置時 CI 還在跑就每分鐘讀一次，否則每 5 分鐘讀一次。留著的 PR 每次一起讀，一個 PR 跑一次 `gh pr view <網址>`。
 
 Claude 用 Bash 或 PowerShell 跑完 `git push`、`gh pr create`、`gh pr ready`、`gh pr reopen` 後會馬上讀一次，之後 5 分鐘內每分鐘讀一次，等 CI 開始跑。`gh` 一時連不上（網路、GitHub 暫時出錯）時保留上一次的狀態，不會突然消失。

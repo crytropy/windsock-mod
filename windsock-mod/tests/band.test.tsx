@@ -572,3 +572,62 @@ test('no pull request for the branch: no pull request on the band', async ($, on
   expect((await ui.find({ type: 'Text', text: /Week/ }))?.text).toBe('Week 12%')
   await ui.unmount()
 })
+
+test('not on any branch: the pull request of a branch at the same commit is shown; with no branch there, the ones seen before stay', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.id', () => ({ value: 'session-10' }) as any)
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [{ kind: 'seven_day', percentUsed: 12 }] } }))
+  const page = 'https://github.com/acme/app/pull/12'
+  const open = {
+    exitCode: 0,
+    stderr: '',
+    stdout: JSON.stringify({ number: 12, url: page, state: 'OPEN', isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN', statusCheckRollup: [] }),
+  }
+  // What `gh pr view` prints with no branch checked out (a detached HEAD).
+  const detached = { exitCode: 1, stdout: '', stderr: 'could not determine current branch: failed to run git: not on any branch' }
+  // The branches at the checked-out commit, as `git for-each-ref --points-at HEAD` prints them.
+  let atHead = 'main\nfeat/keys\n'
+  const ran: string[][] = []
+  on('process.run', (_$, e: any) => {
+    ran.push([...e.argv])
+    const a =
+      e.argv[0] === 'git'
+        ? { exitCode: 0, stdout: atHead, stderr: '' }
+        : e.argv[3] === '--json'
+          ? detached
+          : e.argv[3] === 'feat/keys' || e.argv[3] === page
+            ? open
+            : { exitCode: 1, stdout: '', stderr: `no pull requests found for branch "${e.argv[3]}"` }
+    return { value: { ...a, isStdoutTruncated: false, isStderrTruncated: false } } as any
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>beneath</Text>
+  })
+  on('ui.invalidate', () => ({ value: undefined }) as any)
+  const marks = async () => {
+    const ui = await $.ui.mount(band('terminal', 160))
+    const tree = JSON.stringify(await ui.drawn())
+    await ui.unmount()
+    return tree.match(/[◐✓●] PR #\d+/g) ?? []
+  }
+
+  // `gh` for the branch, `git` for the branches at the commit, then `gh` for each till one has a pull request.
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  expect(ran.map(a => a.slice(0, 4))).toEqual([
+    ['gh', 'pr', 'view', '--json'],
+    ['git', 'for-each-ref', '--points-at', 'HEAD'],
+    ['gh', 'pr', 'view', 'main'],
+    ['gh', 'pr', 'view', 'feat/keys'],
+  ])
+  expect(await marks()).toEqual(['✓ PR #12'])
+
+  // A commit made off the branch: no branch is at it. The pull request seen before is asked by its page and stays.
+  atHead = ''
+  await clock.advance(5 * MIN)
+  expect(ran.length).toBe(7)
+  expect(ran[6].slice(0, 4)).toEqual(['gh', 'pr', 'view', page])
+  expect(await marks()).toEqual(['✓ PR #12'])
+})

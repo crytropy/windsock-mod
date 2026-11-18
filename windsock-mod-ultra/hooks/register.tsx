@@ -5,11 +5,13 @@ import type { Point, Pr, Reading, Stamp } from '../types'
 import {
   PR_MARK,
   addPoint,
+  branchNames,
   cellWidth,
   current,
   forecastFor,
   hasLimits,
   hasNoPr,
+  isDetached,
   isHot,
   isPush,
   limitsOf,
@@ -37,6 +39,8 @@ const FETCH_EVERY_MS = 5 * 60 * 1000
 const RED_MS = 60 * 1000
 // The current branch's pull request, as `gh` reports it.
 const PR_ARGV = ['gh', 'pr', 'view', '--json', 'number,url,state,isDraft,mergeable,mergeStateStatus,statusCheckRollup']
+// The local branches at the checked-out commit: asked when no branch is checked out.
+const AT_HEAD_ARGV = ['git', 'for-each-ref', '--points-at', 'HEAD', '--format=%(refname:short)', 'refs/heads']
 const PR_EVERY_MS = 60 * 1000
 const PR_IDLE_MS = 5 * 60 * 1000
 const PR_TIMEOUT_MS = 15 * 1000
@@ -111,19 +115,42 @@ let pushedAt: number | null = null
 
 type View = { body: string } | 'none' | 'failed'
 
-// `gh pr view` for the current branch, or for one pull request by its page: what it printed,
-// 'none' with no pull request to show, 'failed' when the network or GitHub failed for a moment.
-async function viewPr($: EngineInterface, url?: string): Promise<View> {
-  const argv = url === undefined ? PR_ARGV : [...PR_ARGV.slice(0, 3), url, ...PR_ARGV.slice(3)]
+// `gh pr view` for the current branch, or for one pull request by its page or its branch's name:
+// what it printed, 'none' with no pull request to show, 'failed' when the network or GitHub
+// failed for a moment.
+async function viewPr($: EngineInterface, ref?: string): Promise<View> {
+  const argv = ref === undefined ? PR_ARGV : [...PR_ARGV.slice(0, 3), ref, ...PR_ARGV.slice(3)]
+  let stderr: string
   try {
-    const { exitCode, stdout, stderr } = await $.process.run(argv, { timeoutMs: PR_TIMEOUT_MS })
-    if (exitCode === 0) return { body: stdout }
-    // No pull request for the branch, no repository, not signed in: nothing to draw.
-    return hasNoPr(stderr) ? 'none' : 'failed'
+    const out = await $.process.run(argv, { timeoutMs: PR_TIMEOUT_MS })
+    if (out.exitCode === 0) return { body: out.stdout }
+    stderr = out.stderr
   } catch {
     // `gh` is not installed or did not answer
     return 'failed'
   }
+  if (ref === undefined && isDetached(stderr)) return viewAtHead($)
+  // No pull request for the branch, no repository, not signed in: nothing to draw.
+  return hasNoPr(stderr) ? 'none' : 'failed'
+}
+
+// No branch is checked out (a detached HEAD), so `gh` has none to ask for: the pull request
+// of the first local branch at the checked-out commit that has one.
+async function viewAtHead($: EngineInterface): Promise<View> {
+  let names: string[]
+  try {
+    const out = await $.process.run(AT_HEAD_ARGV, { timeoutMs: PR_TIMEOUT_MS })
+    if (out.exitCode !== 0) return 'none'
+    names = branchNames(out.stdout)
+  } catch {
+    // `git` did not answer: nothing for the commit, the pull requests seen before are still asked
+    return 'none'
+  }
+  for (const name of names) {
+    const view = await viewPr($, name)
+    if (view !== 'none') return view
+  }
+  return 'none'
 }
 
 // The current branch's pull request, then the other open ones this session's branches had,
