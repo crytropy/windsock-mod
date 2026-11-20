@@ -81,6 +81,30 @@ async function record($: EngineInterface, context: SessionUsage['context'], isNe
   await update($, history, h => (isNewTurn || h.length === 0 ? addPoint(h, point) : h))
 }
 
+// A compaction is no turn: no measurement follows it, and the engine has no fill for the new
+// window till its next response. Estimate the window locally at once, so the band drops with the
+// conversation; the next measurement puts the engine's own figure in its place.
+async function compacted($: EngineInterface, tokensAfter: number | undefined): Promise<void> {
+  let tokens = tokensAfter
+  let window = (await read($, reading))?.contextWindow
+  try {
+    const { context } = await $.session.usage({ breakdown: 'summary' })
+    window = context.window
+    if (context.breakdown !== undefined) tokens = context.breakdown.totalTokens
+  } catch {
+    // no estimate: the conversation's own size, as the compaction recorded it
+  }
+  if (tokens === undefined || !window) return
+  const point = { tokens, window }
+  await update($, reading, r => ({
+    ...(r ?? {}),
+    context: (point.tokens / point.window) * 100,
+    contextTokens: point.tokens,
+    contextWindow: point.window,
+  }))
+  await update($, history, h => addPoint(h, point))
+}
+
 let fetchedAt: number | null = null
 
 // At most once every FETCH_EVERY_MS; a failed read keeps the last figure.
@@ -312,6 +336,20 @@ export const register: Register = on => {
     await fetchPr($, true)
     return result
   })
+
+  // The main conversation compacted (`/compact`, the threshold, a plugin): its new size at once.
+  // A subagent's own compaction, and one computed ahead of time, leave the window as it is.
+  on('session.compact', async ($, e, next) => {
+    const result = await next(e)
+    if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined) {
+      try {
+        await compacted($, result.tokensAfter)
+      } catch {
+        // keep the last reading
+      }
+    }
+    return result
+  }).catch(($, e, next) => next(e))
 
   // A /clear starts a new conversation: nothing is cached for it yet, and its trend starts over.
   on('session.end', async ($, e, next) => {

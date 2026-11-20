@@ -706,3 +706,67 @@ test('not on any branch: the pull request of a branch at the same commit is show
   expect(ran[6].slice(0, 4)).toEqual(['gh', 'pr', 'view', page])
   expect(await marks()).toEqual(['✓ PR #12'])
 })
+
+test('a compaction drops the context at once: the local estimate, else the size it recorded; a skipped one leaves it', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  mock.store(on)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.id', () => ({ value: 'session-12' }) as any)
+  // The engine has no fill for the new window till its next response: only the local estimate.
+  let estimate: number | null = 60000
+  on('session.usage', (_$, e: any) => {
+    if (e?.breakdown !== undefined && estimate === null) throw new Error('no estimate')
+    const breakdown = e?.breakdown !== undefined ? { breakdown: { totalTokens: estimate } } : {}
+    return { value: { startedAt: 0, context: { window: 200000, ...breakdown }, rateLimits: [] } } as any
+  })
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  // Stands for core's compaction: the transcript it runs over, and the summary it leaves.
+  const talk = [{ role: 'user' as const, text: 'plan the fix', toolUses: [] }]
+  const summary = [{ role: 'user' as const, text: 'summary: the fix is planned', toolUses: [] }]
+  let compaction: object = { messages: summary, tokensBefore: 160000, tokensAfter: 12000 }
+  on('session.compact', () => compaction as any)
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>beneath</Text>
+  })
+  on('ui.invalidate', () => ({ value: undefined }) as any)
+  const weather = async () => {
+    const ui = await $.ui.mount(band('terminal', 120))
+    const tree = JSON.stringify(await ui.drawn())
+    const head = (await ui.find({ type: 'Text', text: /%$/ }))?.text
+    await ui.unmount()
+    return { head, tree }
+  }
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  await $.session.measure({ context: { window: 200000, tokens: 20000, percent: 10 }, rateLimits: [], changed: ['context'] })
+  await $.session.measure({ context: { window: 200000, tokens: 160000, percent: 80 }, rateLimits: [], changed: ['context'] })
+  expect((await weather()).head).toBe('☇ Storm 80%')
+
+  // Compacted: the estimate of the whole window, before any response.
+  await $.session.compact({ trigger: 'manual', instructions: 'keep the plan', messages: talk })
+  let w = await weather()
+  expect(w.head).toBe('☁ Cloudy 30%')
+  expect(w.tree).toContain('  60k/200k')
+  expect(w.tree).toContain('  ▼ 100k')
+
+  // Skipped by a hook: the conversation is as it was, and so is the band.
+  compaction = { skip: 'off' }
+  estimate = 5000
+  await $.session.compact({ trigger: 'manual', messages: talk })
+  expect((await weather()).head).toBe('☁ Cloudy 30%')
+
+  // No estimate: the conversation's size as the compaction recorded it.
+  compaction = { messages: summary, tokensBefore: 60000, tokensAfter: 12000 }
+  estimate = null
+  await $.session.compact({ trigger: 'manual', messages: talk })
+  w = await weather()
+  expect(w.head).toBe('☀ Clear 6%')
+  expect(w.tree).toContain('  12k/200k')
+
+  // The next response's measurement puts the engine's own figure in its place.
+  await $.session.measure({ context: { window: 200000, tokens: 40000, percent: 20 }, rateLimits: [], changed: ['context'] })
+  w = await weather()
+  expect(w.head).toBe('☀ Clear 20%')
+  expect(w.tree).toContain('  ▲ +28k')
+})
