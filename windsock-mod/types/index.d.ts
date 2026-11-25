@@ -24,10 +24,10 @@ export type Point = {
 /** Milliseconds since the epoch, or null before the first main-loop request. */
 export type Stamp = number | null
 
-/** A pull request, in one of the three states the band draws. */
+/** A pull request, in one of the four states the band draws. */
 export type Pr = {
-  /** Its checks are still running; they passed and it can be merged; it is merged. */
-  kind: 'running' | 'ready' | 'merged'
+  /** Its checks are still running; they passed and it can be merged; it waits in the merge queue; it is merged. */
+  kind: 'running' | 'ready' | 'queued' | 'merged'
   number: number
   /** Its page on GitHub: what a click on it opens. */
   url: string

@@ -139,10 +139,11 @@ export function mmss(ms: number): string {
   return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
 }
 
-// The three pull-request states the band draws; any other draws nothing.
+// The four pull-request states the band draws; any other draws nothing.
 export const PR_MARK = {
   running: { icon: '◐', color: 'warning' },
   ready: { icon: '✓', color: 'success' },
+  queued: { icon: '⧗', color: 'suggestion' },
   merged: { icon: '●', color: 'merged' },
 } as const
 
@@ -192,6 +193,39 @@ export function prStatus(body: string, isJustPushed = false): Pr | null {
   if (pr.mergeable === 'UNKNOWN' || pr.mergeStateStatus === 'UNKNOWN') return { kind: 'running', number, url }
   if (pr.mergeable !== 'MERGEABLE' || BLOCKED.includes(pr.mergeStateStatus)) return null
   return { kind: 'ready', number, url }
+}
+
+// `gh pr view` has no merge-queue field: GitHub's GraphQL API, asked by the pull request's page.
+const QUEUE_QUERY = 'query($url:URI!){resource(url:$url){... on PullRequest{isInMergeQueue}}}'
+
+/** The `gh` command that asks whether the pull request at `url` is in its merge queue. */
+export function queueArgv(url: string): string[] {
+  return ['gh', 'api', 'graphql', '-f', `query=${QUEUE_QUERY}`, '-f', `url=${url}`]
+}
+
+/**
+ * Whether a pull request from `gh pr view --json ...` may be in a merge queue:
+ * open, no draft, and its checks all done and passed. Only these are asked.
+ */
+export function mayQueue(body: string): boolean {
+  let pr: any
+  try {
+    pr = JSON.parse(body)
+  } catch {
+    return false
+  }
+  if (pr === null || typeof pr !== 'object' || pr.state !== 'OPEN' || pr.isDraft === true) return false
+  const checks: any[] = Array.isArray(pr.statusCheckRollup) ? pr.statusCheckRollup.filter((c: unknown) => c !== null && typeof c === 'object') : []
+  return checks.every(c => PASSED.includes(typeof c.status === 'string' ? c.conclusion : c.state))
+}
+
+/** Whether the answer to `queueArgv` says the pull request is in its merge queue. */
+export function isQueued(body: string): boolean {
+  try {
+    return JSON.parse(body)?.data?.resource?.isInMergeQueue === true
+  } catch {
+    return false
+  }
 }
 
 /**

@@ -12,6 +12,8 @@ import {
   isDetached,
   isHot,
   isPush,
+  isQueued,
+  mayQueue,
   mergeReading,
   mmss,
   modelWeekly,
@@ -20,6 +22,7 @@ import {
   prRefOf,
   prStatus,
   prText,
+  queueArgv,
   shortTokens,
   trendText,
   untilText,
@@ -212,6 +215,29 @@ test('gh failing for want of a pull request, not for a moment', async () => {
   expect(hasNoPr('To get started with GitHub CLI, please run:  gh auth login')).toBe(true)
   expect(hasNoPr('error connecting to api.github.com')).toBe(false)
   expect(hasNoPr('HTTP 502: Bad Gateway')).toBe(false)
+})
+
+test('merge queue: only an open pull request with its checks passed is asked, and the answer read', async () => {
+  const url = 'https://github.com/acme/app/pull/12'
+  const view = { number: 12, url, state: 'OPEN', isDraft: false }
+  const run = (status: string, conclusion: string) => ({ __typename: 'CheckRun', status, conclusion })
+  expect(mayQueue(JSON.stringify({ ...view, statusCheckRollup: [run('COMPLETED', 'SUCCESS')] }))).toBe(true)
+  expect(mayQueue(JSON.stringify({ ...view, statusCheckRollup: [] }))).toBe(true)
+  expect(mayQueue(JSON.stringify({ ...view, statusCheckRollup: [run('IN_PROGRESS', '')] }))).toBe(false)
+  expect(mayQueue(JSON.stringify({ ...view, statusCheckRollup: [run('COMPLETED', 'FAILURE')] }))).toBe(false)
+  expect(mayQueue(JSON.stringify({ ...view, isDraft: true, statusCheckRollup: [] }))).toBe(false)
+  expect(mayQueue(JSON.stringify({ ...view, state: 'MERGED', statusCheckRollup: [] }))).toBe(false)
+  expect(mayQueue('no pull requests found')).toBe(false)
+
+  expect(queueArgv(url).slice(0, 3)).toEqual(['gh', 'api', 'graphql'])
+  expect(queueArgv(url)).toContain(`url=${url}`)
+
+  expect(isQueued(JSON.stringify({ data: { resource: { isInMergeQueue: true } } }))).toBe(true)
+  expect(isQueued(JSON.stringify({ data: { resource: { isInMergeQueue: false } } }))).toBe(false)
+  expect(isQueued(JSON.stringify({ data: { resource: null } }))).toBe(false)
+  expect(isQueued('null')).toBe(false)
+  expect(isQueued('HTTP 502')).toBe(false)
+  expect(prText({ kind: 'queued', number: 12, url })).toBe('⧗ PR #12')
 })
 
 test('a pull request page and whether it is still open', async () => {
