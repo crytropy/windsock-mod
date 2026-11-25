@@ -3,6 +3,11 @@ import { expect, mock, test } from 'claude-code/testing'
 const T0 = Date.parse('2026-10-16T10:00:00Z')
 const MIN = 60_000
 
+// GitHub's answer to whether a pull request is in its merge queue.
+const queueAnswer = (isInMergeQueue: boolean) =>
+  ({ value: { exitCode: 0, stdout: JSON.stringify({ data: { resource: { isInMergeQueue } } }), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }) as any
+const isQueueAsk = (e: any) => e.argv[1] === 'api'
+
 const band = (surface: 'terminal' | 'desktop', bodyColumns = 120) => ({
   plugin: 'windsock-mod-ultra',
   surface,
@@ -323,6 +328,7 @@ test('the branch pull request is a link left of the countdown: checks running, r
   let answer = { exitCode: 0, stdout: JSON.stringify({ ...view, statusCheckRollup: [check('COMPLETED', 'SUCCESS'), check('IN_PROGRESS', '')] }) }
   const ran: string[][] = []
   on('process.run', (_$, e: any) => {
+    if (isQueueAsk(e)) return queueAnswer(false)
     ran.push([...e.argv])
     return { value: { ...answer, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as any
   })
@@ -401,6 +407,66 @@ test('the branch pull request is a link left of the countdown: checks running, r
   await ui.unmount()
 })
 
+test('a pull request in its merge queue shows as queued, asked each minute, till it is merged', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.id', () => ({ value: 'session-q' }) as any)
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [{ kind: 'seven_day', percentUsed: 12 }] } }))
+  const url = 'https://github.com/acme/app/pull/12'
+  const view = { number: 12, url, state: 'OPEN', isDraft: false, mergeable: 'MERGEABLE', mergeStateStatus: 'CLEAN' }
+  let answer = JSON.stringify({ ...view, statusCheckRollup: [{ __typename: 'CheckRun', status: 'COMPLETED', conclusion: 'SUCCESS' }] })
+  let queue: 'in' | 'out' | 'failed' = 'in'
+  const asked: string[][] = []
+  const views: string[][] = []
+  on('process.run', (_$, e: any) => {
+    if (isQueueAsk(e)) {
+      asked.push([...e.argv])
+      if (queue === 'failed') return { value: { exitCode: 1, stdout: '', stderr: 'HTTP 502', isStdoutTruncated: false, isStderrTruncated: false } } as any
+      return queueAnswer(queue === 'in')
+    }
+    views.push([...e.argv])
+    return { value: { exitCode: 0, stdout: answer, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } } as any
+  })
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>beneath</Text>
+  })
+  on('ui.invalidate', () => ({ value: undefined }) as any)
+  const mark = async () => {
+    const ui = await $.ui.mount(band('terminal', 120))
+    const m = await ui.find({ type: 'Text', text: /PR #/ })
+    await ui.unmount()
+    return m
+  }
+
+  // Its checks passed: GitHub is asked by its page whether it waits in the merge queue.
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  expect(asked.length).toBe(1)
+  expect(asked[0].slice(0, 3)).toEqual(['gh', 'api', 'graphql'])
+  expect(asked[0]).toContain(`url=${url}`)
+  let m = await mark()
+  expect(m?.text).toBe('⧗ PR #12')
+  expect(m?.props.color).toBe('suggestion')
+
+  // While it waits the clock asks again each minute, not every five.
+  await clock.advance(MIN)
+  expect(views.length).toBe(2)
+  expect(asked.length).toBe(2)
+
+  // GitHub fails for the queue alone: what `gh pr view` said stands.
+  queue = 'failed'
+  await clock.advance(MIN)
+  expect((await mark())?.text).toBe('✓ PR #12')
+
+  // Merged: the queue is not asked.
+  queue = 'in'
+  answer = JSON.stringify({ ...view, state: 'MERGED', mergeable: 'UNKNOWN', statusCheckRollup: [] })
+  await clock.advance(5 * MIN)
+  expect(asked.length).toBe(3)
+  expect((await mark())?.text).toBe('● PR #12')
+})
+
 test('a push asks gh at once and shows the pull request running; gh failing for a moment keeps it', async ($, on) => {
   const clock = mock.clock(on, { now: T0 })
   mock.store(on)
@@ -414,6 +480,7 @@ test('a push asks gh at once and shows the pull request running; gh failing for 
   let byPage = noPr
   const ran: string[][] = []
   on('process.run', (_$, e: any) => {
+    if (isQueueAsk(e)) return queueAnswer(false)
     ran.push([...e.argv])
     const a = e.argv[3] === view.url ? byPage : answer
     return { value: { ...a, isStdoutTruncated: false, isStderrTruncated: false } } as any
@@ -498,6 +565,7 @@ test('the branch moves on: its open pull request stays after the new branch pull
   const pages: Record<string, ReturnType<typeof body> | { exitCode: number; stdout: string; stderr: string }> = {}
   const ran: string[][] = []
   on('process.run', (_$, e: any) => {
+    if (isQueueAsk(e)) return queueAnswer(false)
     ran.push([...e.argv])
     const a = e.argv[3].startsWith('https://') ? pages[e.argv[3]] : branch
     return { value: { ...a, isStdoutTruncated: false, isStderrTruncated: false } } as any
@@ -570,6 +638,7 @@ test('pushed or opened from another worktree: the session folder stays on main, 
   const views: Record<string, { exitCode: number; stdout: string; stderr: string }> = {}
   const ran: string[][] = []
   on('process.run', (_$, e: any) => {
+    if (isQueueAsk(e)) return queueAnswer(false)
     ran.push([...e.argv])
     const ref = e.argv[3] === '--json' ? 'main' : e.argv[3]
     return { value: { ...(views[ref] ?? none(ref)), isStdoutTruncated: false, isStderrTruncated: false } } as any
@@ -666,6 +735,7 @@ test('not on any branch: the pull request of a branch at the same commit is show
   let atHead = 'main\nfeat/keys\n'
   const ran: string[][] = []
   on('process.run', (_$, e: any) => {
+    if (isQueueAsk(e)) return queueAnswer(false)
     ran.push([...e.argv])
     const a =
       e.argv[0] === 'git'

@@ -31,7 +31,7 @@ Context 的天氣顯示參考 Anthropic 的 [Token Weather](https://github.com/a
 |---|---|
 | `◐ PR #12`（黃） | CI 正在跑，或剛推送、CI 還沒開始、GitHub 還在判斷能不能合併 |
 | `✓ PR #12`（綠） | CI 過了，可以合併。PR 沒有設任何 CI 時，能合併就算過（但推送後 5 分鐘內先顯示 `◐`，因為 GitHub 開 PR 後要幾秒才掛上 CI） |
-| `⧗ PR #12`（藍） | 在 merge queue 裡排隊等合併。排隊時每分鐘更新一次。只有 `windsock-mod` 有這個狀態，`windsock-mod-ultra` 還沒有 |
+| `⧗ PR #12`（藍） | 在 merge queue 裡排隊等合併。排隊時每分鐘更新一次 |
 | `● PR #12`（紫） | 已合併 |
 
 `PR #12` 是連結，點了會開 PR 的網頁（終端機通常要按住 Ctrl 或 Cmd 再點）。不支援連結的終端機會把網址直接印在後面。
@@ -132,7 +132,7 @@ Ultra 帳號在驗證完成前，用量裡還是會有 5 小時的數字；`wind
 
 | 版本 | 日期 | 內容 |
 | --- | --- | --- |
-| 0.3.6 | 2026-11-25 | PR 狀態：PR 在 merge queue 排隊時顯示 `⧗`（只有 `windsock-mod`） |
+| 0.3.6 | 2026-11-25 | PR 狀態：PR 在 merge queue 排隊時顯示 `⧗` |
 | 0.3.5 | 2026-11-20 | Context：壓縮對話後馬上更新，不用等下一輪回應 |
 | 0.3.4 | 2026-11-20 | PR 狀態：session 資料夾停在 `main`、在別的 worktree 推送或開 PR 時，PR 也會顯示 |
 | 0.3.3 | 2026-11-18 | PR 狀態：沒掛在分支上（detached HEAD）時，改問指向同一個 commit 的本機分支 |

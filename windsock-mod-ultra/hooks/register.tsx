@@ -14,7 +14,9 @@ import {
   isDetached,
   isHot,
   isPush,
+  isQueued,
   limitsOf,
+  mayQueue,
   mergeReading,
   mmss,
   modelWeekly,
@@ -23,6 +25,7 @@ import {
   prRefOf,
   prStatus,
   prText,
+  queueArgv,
   shortTokens,
   trendText,
 } from './format'
@@ -180,6 +183,22 @@ async function viewAtHead($: EngineInterface): Promise<View> {
   return 'none'
 }
 
+// What the band draws for a pull request `gh pr view` printed: one whose checks passed is
+// asked whether it waits in its merge queue; GitHub failing for that keeps what `gh pr view` said.
+async function statusOf($: EngineInterface, body: string, isJustPushed: boolean): Promise<Pr | null> {
+  const p = prStatus(body, isJustPushed)
+  if (!mayQueue(body)) return p
+  const { number, url } = JSON.parse(body)
+  if (!Number.isInteger(number) || typeof url !== 'string' || !url.startsWith('https://')) return p
+  try {
+    const out = await $.process.run(queueArgv(url), { timeoutMs: PR_TIMEOUT_MS })
+    if (out.exitCode === 0 && isQueued(out.stdout)) return { kind: 'queued', number, url }
+  } catch {
+    // `gh` did not answer
+  }
+  return p
+}
+
 // The current branch's pull request, then the other open ones this session's branches had,
 // asked of `gh`: a push asks at once; a turn asks again after PR_EVERY_MS; the clock after
 // PR_IDLE_MS, or after PR_EVERY_MS while checks run and for PR_PUSHED_MS after a push.
@@ -190,7 +209,7 @@ async function fetchPr($: EngineInterface, isTurn: boolean, isPushed = false, to
   if (isPushed) pushedAt = now
   const last = await read($, prs)
   if (prFetchedAt !== null && !isPushed) {
-    const isSoon = isTurn || last.some(p => p.kind === 'running') || (pushedAt !== null && now - pushedAt < PR_PUSHED_MS)
+    const isSoon = isTurn || last.some(p => p.kind === 'running' || p.kind === 'queued') || (pushedAt !== null && now - pushedAt < PR_PUSHED_MS)
     if (now - prFetchedAt < (isSoon ? PR_EVERY_MS : PR_IDLE_MS)) return
   }
   prFetchedAt = now
@@ -223,7 +242,7 @@ async function fetchPr($: EngineInterface, isTurn: boolean, isPushed = false, to
       if (page.isOpen) urls = [page.url, ...urls].slice(0, HELD_MAX)
     }
     // A push is the current branch's: its checks may not be in yet.
-    const p = prStatus(branch.body, pushedAt !== null && now - pushedAt < PR_PUSHED_MS)
+    const p = await statusOf($, branch.body, pushedAt !== null && now - pushedAt < PR_PUSHED_MS)
     if (p !== null) next.push(p)
   }
 
@@ -243,7 +262,7 @@ async function fetchPr($: EngineInterface, isTurn: boolean, isPushed = false, to
     }
     if (view === 'none' || prPage(view.body)?.isOpen !== true) continue
     kept.push(url)
-    const p = prStatus(view.body, isFresh(url))
+    const p = await statusOf($, view.body, isFresh(url))
     if (p !== null) next.push(p)
   }
   await update($, held, () => kept)
