@@ -1,5 +1,5 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, Register, RenderChildren, SessionUsage } from 'claude-code'
+import type { EngineInterface, Register, SessionUsage } from 'claude-code'
 
 import type { Point, Pr, Reading, Stamp } from '../types'
 import {
@@ -27,11 +27,8 @@ import {
   prText,
   queueArgv,
   shortTokens,
-  titleOf,
-  titlesIn,
   trendText,
 } from './format'
-import type { Titles } from './format'
 
 const TTL_MS = 60 * 60 * 1000
 const WARN_MS = 5 * 60 * 1000
@@ -55,9 +52,6 @@ const PR_TIMEOUT_MS = 15 * 1000
 const PR_PUSHED_MS = 5 * 60 * 1000
 // Open pull requests of this session's branches kept on the band after the branch moves on.
 const HELD_MAX = 5
-// The session's name is read off its transcript: a look at its size this often, the new bytes when it grew.
-const TITLE_EVERY_MS = 15 * 1000
-const TITLE_CHUNK = 4 * 1024 * 1024
 
 const reading = atom({ plugin: 'windsock-mod-ultra', key: 'reading' } as const, null as Reading | null)
 const lastSentAt = atom({ plugin: 'windsock-mod-ultra', key: 'lastSentAt' } as const, null as Stamp)
@@ -65,7 +59,6 @@ const warnedFor = atom({ plugin: 'windsock-mod-ultra', key: 'warnedFor' } as con
 const history = atom({ plugin: 'windsock-mod-ultra', key: 'history' } as const, [] as Point[])
 const prs = atom({ plugin: 'windsock-mod-ultra', key: 'prs' } as const, [] as Pr[])
 const held = atom({ plugin: 'windsock-mod-ultra', key: 'held' } as const, [] as string[])
-const title = atom({ plugin: 'windsock-mod-ultra', key: 'title' } as const, null as string | null)
 
 /** A piece of the usage row: its text and how it is painted. */
 type Part = { text: string; color?: string; dim?: boolean; bold?: boolean }
@@ -276,48 +269,6 @@ async function fetchPr($: EngineInterface, isTurn: boolean, isPushed = false, to
   await update($, prs, () => next)
 }
 
-let titleAt: number | null = null
-let titlePath: string | null = null
-let titleOffset = 0
-let titlesFound: Titles = {}
-
-// The session's name, as `/rename`, the desktop app or Claude Code's own naming wrote it into the
-// transcript. The transcript only grows: each look reads the whole lines added since the last one.
-async function fetchTitle($: EngineInterface): Promise<void> {
-  const now = await $.clock.now()
-  if (titleAt !== null && now - titleAt < TITLE_EVERY_MS) return
-  titleAt = now
-  try {
-    const { transcriptPath } = await $.session.info()
-    if (transcriptPath === '') return
-    const { size } = await $.fs.stat(transcriptPath)
-    // A /clear starts another transcript; a shorter one is read again from the start.
-    if (transcriptPath !== titlePath || size < titleOffset) {
-      titlePath = transcriptPath
-      titleOffset = 0
-      titlesFound = {}
-    }
-    while (titleOffset < size) {
-      const length = Math.min(TITLE_CHUNK, size - titleOffset)
-      const { base64 } = (await $.fs.read(transcriptPath, { as: 'bytes', offset: titleOffset, length })) as { base64: string }
-      const bytes = Uint8Array.from(atob(base64), c => c.charCodeAt(0))
-      const end = bytes.lastIndexOf(0x0a)
-      if (end < 0) {
-        // A line still being written waits for its end; one longer than a read (an image) is no name.
-        if (length < TITLE_CHUNK) break
-        titleOffset += length
-        continue
-      }
-      titlesFound = titlesIn(new TextDecoder().decode(bytes.subarray(0, end + 1)), titlesFound)
-      titleOffset += end + 1
-    }
-    const name = titleOf(titlesFound)
-    if (name !== (await read($, title))) await update($, title, () => name)
-  } catch {
-    // no transcript to read: keep the last name
-  }
-}
-
 async function refresh($: EngineInterface): Promise<void> {
   try {
     const usage = await $.session.usage()
@@ -343,7 +294,6 @@ export const register: Register = on => {
     await refresh($)
     await fetchFable($)
     await fetchPr($, true)
-    await fetchTitle($)
 
     if ((await read($, lastSentAt)) === null) {
       const saved = ((await $.store.get(STORE_KEY)) ?? {}) as Record<string, number>
@@ -368,7 +318,6 @@ export const register: Register = on => {
       }
 
       await fetchPr($, false)
-      await fetchTitle($)
     })
 
     return result
@@ -477,7 +426,7 @@ export const register: Register = on => {
     ))
 
     // Right: the pull requests, each a link to its page (the current branch's first), then the cache countdown.
-    const side: { text: string; node: RenderChildren }[] = []
+    const side: { text: string; node: unknown }[] = []
     for (const open of await read($, prs)) {
       const text = prText(open)
       side.push({
@@ -522,58 +471,25 @@ export const register: Register = on => {
 
     const fits = cache === null || cellWidth(usageText) + 2 + cellWidth(sideText) <= e.props.bodyColumns
 
-    // The second row: the session's name, once it has one.
-    const name = await read($, title)
-    const nameNode =
-      name === null ? null : (
-        <Text key="name" dimColor wrap="truncate-end">
-          {name}
-        </Text>
-      )
-
     const band = fits ? (
-      <Box key="rows" flexDirection="column">
-        <Box key="row" flexDirection="row" justifyContent="space-between">
-          <Box key="usage" flexDirection="row">
-            {usage}
-          </Box>
-          {cache === null ? null : (
-            <Box key="cache" flexDirection="row">
-              {cache}
-            </Box>
-          )}
+      <Box key="row" flexDirection="row" justifyContent="space-between">
+        <Box key="usage" flexDirection="row">
+          {usage}
         </Box>
-        {nameNode === null ? null : (
-          <Box key="name" flexDirection="row">
-            {nameNode}
+        {cache === null ? null : (
+          <Box key="cache" flexDirection="row">
+            {cache}
           </Box>
         )}
       </Box>
     ) : (
-      // Too narrow for one row: the pull requests and the countdown go right of the name, or under it.
       <Box key="rows" flexDirection="column">
         <Box key="usage" flexDirection="row">
           {usage}
         </Box>
-        {nameNode !== null && cellWidth(name ?? '') + 2 + cellWidth(sideText) <= e.props.bodyColumns ? (
-          <Box key="cache" flexDirection="row" justifyContent="space-between">
-            {nameNode}
-            <Box key="side" flexDirection="row">
-              {cache}
-            </Box>
-          </Box>
-        ) : (
-          <Box key="more" flexDirection="column">
-            {nameNode === null ? null : (
-              <Box key="name" flexDirection="row">
-                {nameNode}
-              </Box>
-            )}
-            <Box key="cache" flexDirection="row" justifyContent="flex-end">
-              {cache}
-            </Box>
-          </Box>
-        )}
+        <Box key="cache" flexDirection="row" justifyContent="flex-end">
+          {cache}
+        </Box>
       </Box>
     )
 
