@@ -288,6 +288,34 @@ export function prRefOf(result: unknown): string | null {
   return typeof branch === 'string' && branch !== '' ? branch : null
 }
 
+/** The names a transcript gives its session: the one a person or a tool set, and Claude Code's own. */
+export type Titles = { custom?: string; ai?: string }
+
+// Whole lines of the transcript, not a quote of one inside a message, where quotes are escaped.
+const TITLE_LINE = /^\{"type":"(custom-title|ai-title)","(?:customTitle|aiTitle)":("(?:[^"\\\n]|\\.)*")/gm
+
+/** The last of each name in whole lines of a transcript, over what was found before. */
+export function titlesIn(lines: string, found: Titles = {}): Titles {
+  const next = { ...found }
+  for (const m of lines.matchAll(TITLE_LINE)) {
+    let name: unknown
+    try {
+      name = JSON.parse(m[2])
+    } catch {
+      continue
+    }
+    if (typeof name !== 'string' || name.trim() === '') continue
+    if (m[1] === 'custom-title') next.custom = name.trim()
+    else next.ai = name.trim()
+  }
+  return next
+}
+
+/** The session's name as Claude Code shows it: the one set first, else its own. */
+export function titleOf(t: Titles): string | null {
+  return t.custom ?? t.ai ?? null
+}
+
 /** Terminal cells a text takes: CJK and full-width characters take two. */
 export function cellWidth(text: string): number {
   let width = 0

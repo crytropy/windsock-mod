@@ -47,6 +47,8 @@ declare module 'claude-code' {
       prs: Pr[]
       /** Pages of the open pull requests this session's branches had, newest first. */
       held: string[]
+      /** The session's name, as its transcript last gave it; null before it has one. */
+      title: string | null
     }
   }
 }

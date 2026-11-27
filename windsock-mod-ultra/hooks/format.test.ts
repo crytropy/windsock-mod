@@ -23,6 +23,8 @@ import {
   prStatus,
   prText,
   queueArgv,
+  titleOf,
+  titlesIn,
   shortTokens,
   trendText,
 } from './format'
@@ -243,6 +245,24 @@ test('gh failing because no branch is checked out', async () => {
   expect(isDetached('could not determine current branch: failed to run git: not on any branch')).toBe(true)
   expect(isDetached('no pull requests found for branch "main"')).toBe(false)
   expect(isDetached('HTTP 502: Bad Gateway')).toBe(false)
+})
+
+test('the session name: the last set name wins over Claude Code\'s own; a quoted one is not a name', async () => {
+  const lines = [
+    '{"type":"ai-title","aiTitle":"終端機 context 數值未顯示","sessionId":"s"}',
+    '{"type":"user","message":{"content":"{\\"type\\":\\"custom-title\\",\\"customTitle\\":\\"quoted\\"}"}}',
+    '',
+  ].join('\n')
+  let t = titlesIn(lines)
+  expect(t).toEqual({ ai: '終端機 context 數值未顯示' })
+  expect(titleOf(t)).toBe('終端機 context 數值未顯示')
+
+  t = titlesIn('{"type":"custom-title","customTitle":"#303 \\"名稱\\"","sessionId":"s"}\n', t)
+  expect(titleOf(t)).toBe('#303 "名稱"')
+  t = titlesIn('{"type":"custom-title","customTitle":"#303 改名","sessionId":"s"}\n{"type":"ai-title","aiTitle":"later","sessionId":"s"}\n', t)
+  expect(titleOf(t)).toBe('#303 改名')
+  expect(titleOf({})).toBeNull()
+  expect(titlesIn('{"type":"custom-title","customTitle":"  ","sessionId":"s"}\n')).toEqual({})
 })
 
 test('the branches at a commit, one a line, a few at most', async () => {

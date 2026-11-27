@@ -58,6 +58,7 @@ test('usage on the left, the cache countdown on the right: the time alone, yello
   on('turn.step', async function* (_$, e) {
     return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
   })
+  on('session.info', () => ({ value: { transcriptPath: '' } }) as any)
 
   await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
 
@@ -775,6 +776,100 @@ test('not on any branch: the pull request of a branch at the same commit is show
   expect(ran.length).toBe(7)
   expect(ran[6].slice(0, 4)).toEqual(['gh', 'pr', 'view', page])
   expect(await marks()).toEqual(['✓ PR #12'])
+})
+
+test('the session name on the second row: Claude Code\'s own, then the one set by a rename, read as the transcript grows', async ($, on) => {
+  const clock = mock.clock(on, { now: T0 })
+  mock.store(on)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.id', () => ({ value: 'session-9' }) as any)
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000, tokens: 20000, percent: 10 }, rateLimits: [] } }))
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>beneath</Text>
+  })
+  on('ui.invalidate', () => ({ value: undefined }) as any)
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: '', toolUses: [], stopReason: 'end_turn', usage: null }
+  })
+
+  const PATH = '/home/me/.claude/projects/p/session-9.jsonl'
+  let transcript = new TextEncoder().encode(
+    '{"type":"user","message":{"content":"你好"}}\n{"type":"ai-title","aiTitle":"資訊列顯示名稱","sessionId":"session-9"}\n',
+  )
+  const reads: { offset: number; length: number }[] = []
+  on('session.info', () => ({ value: { transcriptPath: PATH } }) as any)
+  on('fs.stat', () => {
+    return { value: { kind: 'file', size: transcript.length, mtimeMs: 0, isLink: false } } as any
+  })
+  on('fs.read', (_$, e: any) => {
+    const offset = e.offset ?? 0
+    const length = e.length ?? transcript.length - offset
+    reads.push({ offset, length })
+    return { value: { base64: btoa(String.fromCharCode(...transcript.subarray(offset, offset + length))) } } as any
+  })
+  const grow = (text: string) => {
+    const added = new TextEncoder().encode(text)
+    const next = new Uint8Array(transcript.length + added.length)
+    next.set(transcript)
+    next.set(added, transcript.length)
+    transcript = next
+  }
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+
+  let ui = await $.ui.mount(band('terminal', 120))
+  expect((await ui.find({ type: 'Text', text: '資訊列顯示名稱' }))?.props.dimColor).toBe(true)
+  const rows = (await ui.drawn()) as any
+  expect(JSON.stringify(rows).indexOf('Clear')).toBeLessThan(JSON.stringify(rows).indexOf('資訊列顯示名稱'))
+  await ui.unmount()
+
+  // A rename lands, and a line still being written waits for its end.
+  const before = transcript.length
+  grow('{"type":"custom-title","customTitle":"#303 資訊列名稱","sessionId":"session-9"}\n{"type":"assistant","mes')
+  await clock.advance(15000)
+  // Only the new bytes are read; the unfinished line is read again from its start.
+  const partial = transcript.length - new TextEncoder().encode('{"type":"assistant","mes').length
+  expect(reads.map(r => r.offset).filter(o => o > 0)).toEqual([before, partial])
+  ui = await $.ui.mount(band('terminal', 120))
+  expect(await ui.find({ type: 'Text', text: '#303 資訊列名稱' })).toBeDefined()
+  expect(await ui.find({ type: 'Text', text: '資訊列顯示名稱' })).toBeUndefined()
+  await ui.unmount()
+
+  // Claude Code's own naming later does not take the place of the one set.
+  grow('sage":{}}\n{"type":"ai-title","aiTitle":"another","sessionId":"session-9"}\n')
+  await clock.advance(15000)
+  expect(reads.at(-1)?.offset).toBe(partial)
+  ui = await $.ui.mount(band('terminal', 120))
+  expect(await ui.find({ type: 'Text', text: '#303 資訊列名稱' })).toBeDefined()
+  await ui.unmount()
+
+  // Narrow: the countdown goes right of the name, on the second row.
+  await step($)
+  ui = await $.ui.mount(band('terminal', 40))
+  const tree = JSON.stringify(await ui.drawn())
+  expect(tree).toContain('space-between')
+  expect(tree.indexOf('#303 資訊列名稱')).toBeLessThan(tree.indexOf('60:00'))
+  await ui.unmount()
+})
+
+test('no transcript: no name and no second row', async ($, on) => {
+  mock.clock(on, { now: T0 })
+  mock.store(on)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.id', () => ({ value: 'session-10' }) as any)
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 200000 }, rateLimits: [] } }))
+  on('session.info', () => ({ value: { transcriptPath: '' } }) as any)
+  on('ui.render', ($, e) => {
+    const { Text } = $.ui.resolve(e)
+    return <Text>beneath</Text>
+  })
+  on('ui.invalidate', () => ({ value: undefined }) as any)
+
+  await $.session.start({ cwd: '/', surface: 'desktop', isInteractive: true })
+  const ui = await $.ui.mount(band('terminal', 120))
+  expect(JSON.stringify(await ui.drawn())).not.toContain('"name"')
+  await ui.unmount()
 })
 
 test('a compaction drops the context at once: the local estimate, else the size it recorded; a skipped one leaves it', async ($, on) => {
